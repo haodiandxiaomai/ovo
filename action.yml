@@ -184,7 +184,7 @@ runs:
       shell: bash
       working-directory: android-kernel
       run: |
-        pip install ast-grep-cli
+        pip install ast-grep-cli --break-system-packages
         sudo apt-get install llvm-15 -y
         ast-grep -U -p '$$ check_exports($$$$$) {$$}' -r '' common/scripts/mod/modpost.c
         ast-grep -U -p 'check_exports($$$$$);' -r '' common/scripts/mod/modpost.c
