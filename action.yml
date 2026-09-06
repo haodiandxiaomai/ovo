@@ -184,19 +184,27 @@ runs:
       shell: bash
       working-directory: android-kernel
       run: |
-        pip install ast-grep-cli --break-system-packages
-        sudo apt-get install llvm-15 -y
+        python3 -m venv /tmp/sgenv
+        /tmp/sgenv/bin/pip install ast-grep-cli
+        export PATH="/tmp/sgenv/bin:$PATH"
+        ast-grep --version
+
+        sudo apt-get install -y llvm-15
+
         ast-grep -U -p '$$ check_exports($$$$$) {$$}' -r '' common/scripts/mod/modpost.c
         ast-grep -U -p 'check_exports($$$$$);' -r '' common/scripts/mod/modpost.c
+
         if [[ "${{ inputs.simple-tag }}" == "android14-5.15" ]]; then
           if [ "${{ inputs.arch }}" = "aarch64" ]; then
             ast-grep -U -p 'static bool module_imports_namespace($$ARGS) { return $AAA; }' -r 'static __attribute__((unused)) bool module_imports_namespace($$$$$ARGS) { return $AAA; }' common/scripts/mod/modpost.c
             ast-grep -U -p 'static void check_for_gpl_usage($$ARGS) { switch($A) {$$$$$B} }' -r 'static __attribute__((unused)) void check_for_gpl_usage($$ARGS) { switch($A) {$$$$$B} }' common/scripts/mod/modpost.c
           fi
         fi
+
         if [ -f common/android/gki_aarch64_modules ]; then
           echo "drivers/${{ inputs.module-name }}/${{ inputs.module-name }}.ko" >> common/android/gki_aarch64_modules
         fi
+
         if [ ! -f build/build.sh ]; then
           sed -i 's/needs unknown symbol/Dont abort when unknown symbol/g' build/kernel/*.sh || echo "No unknown symbol scripts found"
           if [ -f common/modules.bzl ]; then
