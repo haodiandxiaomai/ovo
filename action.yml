@@ -74,35 +74,78 @@ runs:
         mkdir android-kernel
         df -h android-kernel
         cd android-kernel
-        # 使用清华镜像源（如果网络环境在国内，可改回官方源）
-        repo init --depth=1 --u https://mirrors.tuna.tsinghua.edu.cn/git/AOSP/kernel/manifest -b common-${{ inputs.simple-tag }} --repo-rev=v2.16
-    
-        # 如果 tag 是完整的带 _r 后缀的版本，则修改 manifest 中 kernel/common 的 revision
+
+        # =============================================
+        # 修复 1: 使用 Google 官方源
+        #   清华镜像缺少 kernel/、kernel/common-modules/
+        #   等子仓库，导致 repo sync 全部 fetch 失败
+        # =============================================
+        repo init --depth=1 \
+          -u https://android.googlesource.com/kernel/manifest \
+          -b common-${{ inputs.simple-tag }} \
+          --repo-rev=stable
+
+        # =============================================
+        # 修复 2: 只修改 kernel/common 的 revision
+        #   原来的 sed 会把所有仓库的 revision 都替换
+        #   导致非 kernel 仓库找不到 tag 而报错
+        # =============================================
         if [[ "${{ inputs.tag }}" == *"_r"* ]]; then
           echo "Detected full tag with _r suffix: ${{ inputs.tag }}"
           MANIFEST=".repo/manifests/default.xml"
-          # 将 kernel/common 的 revision 替换为 inputs.tag
-          sed -i "s|revision=\"[^\"]*\"|revision=\"${{ inputs.tag }}\"|g" "$MANIFEST"
+
+          if [ ! -f "$MANIFEST" ]; then
+            echo "ERROR: Manifest file not found at $MANIFEST"
+            exit 1
+          fi
+
+          echo "--- Before sed (kernel/common entry) ---"
+          grep 'name="kernel/common"' "$MANIFEST" || echo "WARNING: kernel/common not found in manifest"
+
+          # 仅匹配包含 kernel/common 的那一行，替换其 revision
+          sed -i '/name="kernel\/common"/s|revision="[^"]*"|revision="${{ inputs.tag }}"|' "$MANIFEST"
+
+          echo "--- After sed (kernel/common entry) ---"
+          grep 'name="kernel/common"' "$MANIFEST" || echo "WARNING: kernel/common not found after sed"
+
+          # 验证其他仓库的 revision 没有被修改
+          echo "--- Verification: other repos should NOT contain ${{ inputs.tag }} ---"
+          if grep -v 'kernel/common' "$MANIFEST" | grep -q '${{ inputs.tag }}'; then
+            echo "ERROR: sed modified other repos! Aborting."
+            exit 1
+          fi
+          echo "Verification passed: only kernel/common was modified."
         fi
-    
-        REMOTE_BRANCH=$(git ls-remote https://android.googlesource.com/kernel/common ${{ inputs.tag }})
-        if grep -q deprecated <<< $REMOTE_BRANCH; then
+
+        # 检查 remote branch 是否存在
+        REMOTE_BRANCH=$(git ls-remote https://android.googlesource.com/kernel/common ${{ inputs.tag }} 2>&1 || true)
+        if echo "$REMOTE_BRANCH" | grep -q deprecated; then
           echo "Warning: Found deprecated branch: ${{ inputs.tag }}"
+        elif [ -z "$REMOTE_BRANCH" ]; then
+          echo "Warning: Tag ${{ inputs.tag }} may not exist on remote"
         fi
+
         repo --version
-        # 增加重试次数，应对网络不稳定
-        repo sync -c -j$(nproc) --no-tags --retry=5
+
+        # 同步源码，增加重试次数应对网络不稳定
+        repo sync -c -j$(nproc) --no-tags --retry=10
+
         df -h
 
     - name: Setup CCache
       uses: actions/cache@v4
       with:
-        path: ~/.ccache-${{ inputs.tag }}
+        path: ~/.ccache
         key: gki-kernel-${{ inputs.tag }}-cache
+        restore-keys: |
+          gki-kernel-${{ inputs.tag }}-
+          gki-kernel-
         max-size: 2G
 
     - name: Setup Kernel Module
       shell: bash
+      env:
+        CCACHE_DIR: /home/runner/.ccache
       run: |
         tree -f ${{ inputs.module-name }}
 
@@ -111,7 +154,7 @@ runs:
         echo "[+] GKI_ROOT: $GKI_ROOT"
         echo "[+] Copy driver to $GKI_ROOT/common/drivers"
         mv ${{ inputs.module-name }} $GKI_ROOT/common/drivers/${{ inputs.module-name }}
-        
+
         echo "[+] Add driver to Makefile"
         DRIVER_MAKEFILE=$GKI_ROOT/common/drivers/Makefile
         DRIVER_KCONFIG=$GKI_ROOT/common/drivers/Kconfig
@@ -130,17 +173,17 @@ runs:
       run: |
         pip install ast-grep-cli
         sudo apt-get install llvm-15 -y
-        
-        ast-grep -U -p '$$$ check_exports($$$) {$$$}' -r '' common/scripts/mod/modpost.c
-        ast-grep -U -p 'check_exports($$$);' -r '' common/scripts/mod/modpost.c
-        
+
+        ast-grep -U -p '$$ check_exports($$$$$) {$$}' -r '' common/scripts/mod/modpost.c
+        ast-grep -U -p 'check_exports($$$$$);' -r '' common/scripts/mod/modpost.c
+
         if [[ "${{ inputs.simple-tag }}" == "android14-5.15" ]]; then
           if [ "${{ inputs.arch }}" = "aarch64" ]; then
-            ast-grep -U -p 'static bool module_imports_namespace($$$ARGS) { return $AAA; }' -r 'static __attribute__((unused)) bool module_imports_namespace($$$ARGS) { return $AAA; }' common/scripts/mod/modpost.c
-            ast-grep -U -p 'static void check_for_gpl_usage($$$ARGS) { switch($A) {$$$B} }' -r 'static __attribute__((unused)) void check_for_gpl_usage($$$ARGS) { switch($A) {$$$B} }' common/scripts/mod/modpost.c
+            ast-grep -U -p 'static bool module_imports_namespace($$ARGS) { return $AAA; }' -r 'static __attribute__((unused)) bool module_imports_namespace($$$$$ARGS) { return $AAA; }' common/scripts/mod/modpost.c
+            ast-grep -U -p 'static void check_for_gpl_usage($$ARGS) { switch($A) {$$$$$B} }' -r 'static __attribute__((unused)) void check_for_gpl_usage($$ARGS) { switch($A) {$$$$$B} }' common/scripts/mod/modpost.c
           fi
         fi
-        
+
         if [ -f common/android/gki_aarch64_modules ]; then
           echo "drivers/${{ inputs.module-name }}/${{ inputs.module-name }}.ko" >> common/android/gki_aarch64_modules
         fi
@@ -177,8 +220,9 @@ runs:
       if: inputs.fast_build == 'true'
       shell: bash
       working-directory: android-kernel
+      env:
+        CCACHE_DIR: /home/runner/.ccache
       run: |
-        
         if [[ "${{ inputs.simple-tag }}" == "android16-6.12" ]]; then
           if [ "${{ inputs.arch }}" = "aarch64" ]; then
             tools/bazel run --disk_cache=/home/runner/.cache/bazel --config=fast --lto=thin //common:kernel_aarch64_dist
@@ -205,6 +249,8 @@ runs:
       if: inputs.fast_build == 'false'
       shell: bash
       working-directory: android-kernel
+      env:
+        CCACHE_DIR: /home/runner/.ccache
       run: |
         if [[ "${{ inputs.simple-tag }}" == "android14-5.15" ]]; then
           tools/bazel run //common:db845c_abi_update_symbol_list
