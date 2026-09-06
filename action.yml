@@ -69,7 +69,6 @@ runs:
 
     - name: Setup Android Kernel Source Code
       shell: bash
-      timeout-minutes: 60
       run: |
         # =============================================
         # 修复 1: 更新 repo launcher
