@@ -8,6 +8,7 @@ jobs:
     name: GKI Kernel Module Build
     runs-on: ubuntu-latest
     needs: upload-artifact
+    timeout-minutes: 120
     env:
       CCACHE_COMPILERCHECK: "%compiler% -dumpmachine; %compiler% -dumpversion"
       CCACHE_NOHASHDIR: "true"
