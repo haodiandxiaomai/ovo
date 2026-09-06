@@ -16,19 +16,11 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - version: 5.15.158
-            tag: android14-5.15
-            patch-level: 2024-08
+          - version: 6.1.128
+            tag: android14-6.1-2025-03_r13   # 使用实际存在的标签
+            simple-tag: android14-6.1        # 用于白名单验证
             arch: aarch64
-          - version: 6.1.75
-            tag: android14-6.1
-            patch-level: 2024-05
-            arch: aarch64
-          - version: 6.1.115
-            tag: android14-6.1
-            patch-level: 2024-11
-            arch: aarch64
-          
+
     steps:
       - name: Maximize build space
         uses: easimon/maximize-build-space@master
@@ -48,8 +40,8 @@ jobs:
         uses: ./
         with:
           arch: ${{ matrix.arch }}
-          tag: ${{ matrix.tag }}-${{ matrix.patch-level }}
-          simple-tag: ${{ matrix.tag }}
+          tag: ${{ matrix.tag }}              # 完整标签，如 android14-6.1-2025-03_r13
+          simple-tag: ${{ matrix.simple-tag }} # 用于白名单，如 android14-6.1
           version: ${{ matrix.version }}
           fast_build: false
           module-name: ovo
