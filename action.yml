@@ -90,7 +90,7 @@ runs:
           echo "Warning: Found deprecated branch: ${{ inputs.tag }}"
         fi
         repo --version
-        repo sync -c -j$(nproc) --no-tags
+        repo sync -c -j4 --no-tags --retry=5 --force-sync
         df -h
 
     - name: Setup CCache
