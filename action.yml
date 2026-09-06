@@ -61,13 +61,7 @@ runs:
           echo "Warning: ${{inputs.module-name}}/${{inputs.module-name}}.c does not exist."
         fi
 
-    - name: Install Build Tools
-      uses: awalsh128/cache-apt-pkgs-action@latest
-      with:
-        packages: binutils git ccache automake flex lzop bison gperf build-essential zip curl zlib1g-dev libxml2-utils bzip2 libbz2-dev libbz2-1.0 libghc-bzlib-dev squashfs-tools pngcrush schedtool dpkg-dev liblz4-tool make optipng maven libssl-dev pwgen libswitch-perl policycoreutils minicom libxml-sax-base-perl libxml-simple-perl bc libx11-dev libgl1-mesa-dev xsltproc unzip device-tree-compiler python3 libelf-dev binutils-aarch64-linux-gnu gcc gzip
-        version: 1.0
-
-    - name: Setup Android Kernel Source Code
+        - name: Setup Android Kernel Source Code
       shell: bash
       run: |
         # =============================================
@@ -83,8 +77,6 @@ runs:
 
         # =============================================
         # 修复 2: 使用 Google 官方源 + 禁用 superproject
-        #   superproject 模式会下载一个巨大的 packfile
-        #   在 GitHub Actions 网络下会卡死
         # =============================================
         echo "[+] Initializing repo..."
         repo init --depth=1 \
@@ -94,7 +86,9 @@ runs:
           --no-use-superproject
 
         # =============================================
-        # 修复 3: 只修改 kernel/common 的 revision
+        # 修复 3: 判断 tag/branch 并正确设置 revision
+        #   repo manifest 的 revision 默认按 refs/heads/ (branch) fetch
+        #   如果实际是 tag，需要加 refs/tags/ 前缀
         # =============================================
         if [[ "${{ inputs.tag }}" == *"_r"* ]]; then
           echo "[+] Detected full tag with _r suffix: ${{ inputs.tag }}"
@@ -108,26 +102,38 @@ runs:
           echo "--- Before sed (kernel/common entry) ---"
           grep 'name="kernel/common"' "$MANIFEST"
 
-          sed -i '/name="kernel\/common"/s|revision="[^"]*"|revision="${{ inputs.tag }}"|' "$MANIFEST"
+          # 判断 revision 是 tag 还是 branch
+          echo "[+] Checking if ${{ inputs.tag }} is a tag or branch..."
+          LS_OUTPUT=$(git ls-remote https://android.googlesource.com/kernel/common ${{ inputs.tag }} 2>&1 || true)
+          echo "[+] ls-remote output: $LS_OUTPUT"
+
+          if echo "$LS_OUTPUT" | grep -q "refs/tags/"; then
+            # 是 tag，需要 refs/tags/ 前缀
+            REVISION="refs/tags/${{ inputs.tag }}"
+            echo "[+] It is a TAG, using revision: $REVISION"
+          elif echo "$LS_OUTPUT" | grep -q "refs/heads/"; then
+            # 是 branch，直接用名字
+            REVISION="${{ inputs.tag }}"
+            echo "[+] It is a BRANCH, using revision: $REVISION"
+          else
+            # 都没找到，尝试用 refs/tags/ 兜底
+            echo "[+] Warning: could not determine ref type, trying as tag"
+            REVISION="refs/tags/${{ inputs.tag }}"
+          fi
+
+          # 仅匹配包含 kernel/common 的那一行，替换 revision
+          sed -i "/name=\"kernel\/common\"/s|revision=\"[^\"]*\"|revision=\"${REVISION}\"|" "$MANIFEST"
 
           echo "--- After sed (kernel/common entry) ---"
           grep 'name="kernel/common"' "$MANIFEST"
 
+          # 验证其他仓库的 revision 没有被修改
           echo "--- Verification ---"
-          if grep -v 'kernel/common' "$MANIFEST" | grep -q '${{ inputs.tag }}'; then
+          if grep -v 'kernel/common' "$MANIFEST" | grep -q 'android14-6.1-2025-03_r13'; then
             echo "ERROR: sed modified other repos! Aborting."
             exit 1
           fi
           echo "Verification passed: only kernel/common was modified."
-        fi
-
-        # 检查 remote branch
-        echo "[+] Checking remote tag..."
-        REMOTE_BRANCH=$(git ls-remote https://android.googlesource.com/kernel/common ${{ inputs.tag }} 2>&1 || true)
-        if echo "$REMOTE_BRANCH" | grep -q deprecated; then
-          echo "Warning: Found deprecated branch: ${{ inputs.tag }}"
-        elif [ -z "$REMOTE_BRANCH" ]; then
-          echo "Warning: Tag ${{ inputs.tag }} may not exist on remote"
         fi
 
         # =============================================
@@ -145,14 +151,7 @@ runs:
         echo "[+] Heartbeat PID: $HEARTBEAT_PID"
 
         # =============================================
-        # 修复 5: repo sync 优化
-        #   -c             : 只同步 manifest 指定的分支
-        #   --no-tags      : 不拉取 tag
-        #   --current-branch: 每个仓库只 fetch 当前分支
-        #   --force-sync   : 处理残留状态
-        #   --retry-clone=5: clone 失败重试
-        #   --retry=10     : fetch 失败重试
-        #   -j2            : 降低并发，避免连接过多被限速
+        # 修复 5: repo sync
         # =============================================
         echo "[+] Starting repo sync..."
         repo sync \
