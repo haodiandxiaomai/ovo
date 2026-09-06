@@ -16,17 +16,10 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - version: 5.15.158
-            tag: android14-5.15
-            patch-level: 2024-08
-            arch: aarch64
-          - version: 6.1.75
+          # 只保留一个 android14-6.1 条目，安全日期 2025-03
+          - version: 6.1.99          # 此版本号可调整，实际源码由 tag 决定
             tag: android14-6.1
-            patch-level: 2024-05
-            arch: aarch64
-          - version: 6.1.115
-            tag: android14-6.1
-            patch-level: 2024-11
+            patch-level: 2025-03
             arch: aarch64
           
     steps:
@@ -48,7 +41,7 @@ jobs:
         uses: ./
         with:
           arch: ${{ matrix.arch }}
-          tag: ${{ matrix.tag }}-${{ matrix.patch-level }}
+          tag: ${{ matrix.tag }}-${{ matrix.patch-level }}   # 组合为 android14-6.1-2025-03
           simple-tag: ${{ matrix.tag }}
           version: ${{ matrix.version }}
           fast_build: false
