@@ -72,31 +72,27 @@ runs:
       run: |
         # =============================================
         # 修复 1: 更新 repo launcher
-        #   系统自带 launcher 是 v2.36，但 repo init
-        #   下载了 v2.66+，版本差距太大会导致 sync hang
         # =============================================
         echo "[+] Updating repo launcher..."
         curl -sSL https://storage.googleapis.com/git-repo-downloads/repo | sudo tee /usr/bin/repo > /dev/null
         sudo chmod +x /usr/bin/repo
-        /usr/bin/repo version
-        echo ""
+        repo version
 
         mkdir android-kernel
         cd android-kernel
 
         # =============================================
         # 修复 2: 使用 Google 官方源
-        #   清华镜像缺少 kernel/ 子仓库
+        #   --depth=1 在 init 阶段设置浅克隆深度
         # =============================================
         echo "[+] Initializing repo..."
-        /usr/bin/repo init --depth=1 \
+        repo init --depth=1 \
           -u https://android.googlesource.com/kernel/manifest \
           -b common-${{ inputs.simple-tag }} \
           --repo-rev=stable
 
         # =============================================
         # 修复 3: 只修改 kernel/common 的 revision
-        #   原来 sed 会把所有仓库的 revision 都替换掉
         # =============================================
         if [[ "${{ inputs.tag }}" == *"_r"* ]]; then
           echo "[+] Detected full tag with _r suffix: ${{ inputs.tag }}"
@@ -134,16 +130,13 @@ runs:
         fi
 
         # =============================================
-        # 修复 4: 启动心跳进程
-        #   repo sync 下载量大（~5-10GB），期间可能长时间
-        #   无输出，心跳每 2 分钟打印一次，便于排查进度
+        # 修复 4: 心跳进程
         # =============================================
         echo "[+] Starting heartbeat monitor..."
         (
           while true; do
             sleep 120
             echo "[HEARTBEAT $(date '+%H:%M:%S')] repo sync in progress..."
-            # 打印磁盘使用情况辅助判断
             du -sh $GITHUB_WORKSPACE/android-kernel 2>/dev/null || true
           done
         ) &
@@ -151,15 +144,14 @@ runs:
         echo "[+] Heartbeat PID: $HEARTBEAT_PID"
 
         # =============================================
-        # 修复 5: repo sync 参数优化
+        # 修复 5: repo sync 不使用 --depth（仅 init 支持）
         #   -c          : 只同步 manifest 指定的分支
         #   --no-tags   : 不拉取 tag，减少下载量
-        #   --depth=1   : 浅克隆
-        #   --force-sync: 处理可能的残留状态
+        #   --force-sync: 处理残留状态
         #   --retry=10  : 网络重试
         # =============================================
         echo "[+] Starting repo sync..."
-        /usr/bin/repo sync -c -j$(nproc) --no-tags --depth=1 --force-sync --retry=10
+        repo sync -c -j$(nproc) --no-tags --force-sync --retry=10
         SYNC_EXIT=$?
 
         # 停止心跳
