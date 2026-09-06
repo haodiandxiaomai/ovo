@@ -161,7 +161,6 @@ runs:
           --no-tags \
           --current-branch \
           --force-sync \
-          --retry-clone=5 \
           --retry=10
         SYNC_EXIT=$?
 
