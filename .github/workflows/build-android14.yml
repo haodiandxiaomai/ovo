@@ -4,9 +4,25 @@ on:
   workflow_dispatch:
 
 jobs:
+  # 1. 上传 LKM 源码，供后续构建下载
+  upload-source:
+    name: Upload LKM Source Code
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Upload LKM Source Code
+        uses: actions/upload-artifact@v4
+        with:
+          name: ovo               # 必须与构建 action 中 module-name 一致
+          path: ovo               # 源码位于仓库根目录的 ovo 文件夹
+
+  # 2. 构建内核模块
   build:
     name: GKI Kernel Module Build
     runs-on: ubuntu-latest
+    needs: upload-source          # 等待源码上传完成
     env:
       CCACHE_COMPILERCHECK: "%compiler% -dumpmachine; %compiler% -dumpversion"
       CCACHE_NOHASHDIR: "true"
@@ -15,10 +31,10 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          # 只保留 Android 14 / 6.1 / 2025-03 安全版本
+          # 仅构建 Android 14 / 6.1 / 2025-03 安全版本
           - version: 6.1.128
             tag: common-android14-6.1        # 加 common- 前缀
-            patch-level: 2025-03             # 拼接后 => common-android14-6.1-2025-03
+            patch-level: 2025-03             # 拼接后为 common-android14-6.1-2025-03
             arch: aarch64
 
     steps:
@@ -33,30 +49,18 @@ jobs:
           remove-codeql: 'true'
           remove-docker-images: 'true'
 
+      # 该 action 内部会下载名为 "ovo" 的 artifact，所以此处仍需 checkout 以确保 action 可用？
+      # 但实际 action 可能自己 clone，保留 checkout 以防万一。
       - name: Checkout Repository
         uses: actions/checkout@v4
 
       - name: Run GKI Kernel Build Action
-        uses: ./
+        uses: ./                           # 使用仓库根目录下的 action
         with:
           arch: ${{ matrix.arch }}
-          tag: ${{ matrix.tag }}-${{ matrix.patch-level }}   # 最终为 common-android14-6.1-2025-03
-          simple-tag: ${{ matrix.tag }}
+          tag: ${{ matrix.tag }}-${{ matrix.patch-level }}   # common-android14-6.1-2025-03
+          simple-tag: ${{ matrix.tag }}    # common-android14-6.1
           version: ${{ matrix.version }}
           fast_build: false
           module-name: ovo
-          module-path: ovo
-
-  upload-artifact:
-    name: Upload LKM Source Code
-    runs-on: ubuntu-latest
-    needs: build                         # 等待构建完成，避免竞态
-    steps:
-      - name: Checkout Repository
-        uses: actions/checkout@v4
-
-      - name: Upload LKM Source Code
-        uses: actions/upload-artifact@v4
-        with:
-          name: ovo
-          path: ovo
+          module-path: ovo                 # action 会从此路径获取下载的源码
