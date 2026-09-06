@@ -69,6 +69,7 @@ runs:
 
     - name: Setup Android Kernel Source Code
       shell: bash
+      timeout-minutes: 60
       run: |
         # =============================================
         # 修复 1: 更新 repo launcher
@@ -82,14 +83,16 @@ runs:
         cd android-kernel
 
         # =============================================
-        # 修复 2: 使用 Google 官方源
-        #   --depth=1 在 init 阶段设置浅克隆深度
+        # 修复 2: 使用 Google 官方源 + 禁用 superproject
+        #   superproject 模式会下载一个巨大的 packfile
+        #   在 GitHub Actions 网络下会卡死
         # =============================================
         echo "[+] Initializing repo..."
         repo init --depth=1 \
           -u https://android.googlesource.com/kernel/manifest \
           -b common-${{ inputs.simple-tag }} \
-          --repo-rev=stable
+          --repo-rev=stable \
+          --no-use-superproject
 
         # =============================================
         # 修复 3: 只修改 kernel/common 的 revision
@@ -111,7 +114,6 @@ runs:
           echo "--- After sed (kernel/common entry) ---"
           grep 'name="kernel/common"' "$MANIFEST"
 
-          # 验证其他仓库的 revision 没有被修改
           echo "--- Verification ---"
           if grep -v 'kernel/common' "$MANIFEST" | grep -q '${{ inputs.tag }}'; then
             echo "ERROR: sed modified other repos! Aborting."
@@ -130,28 +132,38 @@ runs:
         fi
 
         # =============================================
-        # 修复 4: 心跳进程
+        # 修复 4: 心跳进程（每 60 秒打印一次）
         # =============================================
         echo "[+] Starting heartbeat monitor..."
         (
           while true; do
-            sleep 120
-            echo "[HEARTBEAT $(date '+%H:%M:%S')] repo sync in progress..."
-            du -sh $GITHUB_WORKSPACE/android-kernel 2>/dev/null || true
+            sleep 60
+            SIZE=$(du -sh $GITHUB_WORKSPACE/android-kernel 2>/dev/null | cut -f1)
+            echo "[HEARTBEAT $(date '+%H:%M:%S')] repo sync in progress... size=$SIZE"
           done
         ) &
         HEARTBEAT_PID=$!
         echo "[+] Heartbeat PID: $HEARTBEAT_PID"
 
         # =============================================
-        # 修复 5: repo sync 不使用 --depth（仅 init 支持）
-        #   -c          : 只同步 manifest 指定的分支
-        #   --no-tags   : 不拉取 tag，减少下载量
-        #   --force-sync: 处理残留状态
-        #   --retry=10  : 网络重试
+        # 修复 5: repo sync 优化
+        #   -c             : 只同步 manifest 指定的分支
+        #   --no-tags      : 不拉取 tag
+        #   --current-branch: 每个仓库只 fetch 当前分支
+        #   --force-sync   : 处理残留状态
+        #   --retry-clone=5: clone 失败重试
+        #   --retry=10     : fetch 失败重试
+        #   -j2            : 降低并发，避免连接过多被限速
         # =============================================
         echo "[+] Starting repo sync..."
-        repo sync -c -j$(nproc) --no-tags --force-sync --retry=10
+        repo sync \
+          -c \
+          -j2 \
+          --no-tags \
+          --current-branch \
+          --force-sync \
+          --retry-clone=5 \
+          --retry=10
         SYNC_EXIT=$?
 
         # 停止心跳
