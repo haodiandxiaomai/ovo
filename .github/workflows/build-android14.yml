@@ -16,10 +16,9 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          # 只保留 android14-6.1，安全日期 2025-03，tag 必须为 android14-6.1 以通过验证
           - version: 6.1.128
-            tag: android14-6.1          # 用于 simple-tag 验证
-            patch-level: 2025-03         # 会拼接成 tag+patch-level，即 android14-6.1-2025-03
+            tag: android14-6.1-2025-03_r13   # 使用实际存在的标签
+            simple-tag: android14-6.1        # 用于白名单验证
             arch: aarch64
 
     steps:
@@ -41,8 +40,8 @@ jobs:
         uses: ./
         with:
           arch: ${{ matrix.arch }}
-          tag: ${{ matrix.tag }}-${{ matrix.patch-level }}   # 实际分支名：android14-6.1-2025-03
-          simple-tag: ${{ matrix.tag }}                       # 用于白名单验证：android14-6.1
+          tag: ${{ matrix.tag }}              # 完整标签，如 android14-6.1-2025-03_r13
+          simple-tag: ${{ matrix.simple-tag }} # 用于白名单，如 android14-6.1
           version: ${{ matrix.version }}
           fast_build: false
           module-name: ovo
