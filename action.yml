@@ -70,28 +70,36 @@ runs:
     - name: Setup Android Kernel Source Code
       shell: bash
       run: |
-        sudo apt-get install -y repo
+        # =============================================
+        # 修复 1: 更新 repo launcher
+        #   系统自带 launcher 是 v2.36，但 repo init
+        #   下载了 v2.66+，版本差距太大会导致 sync hang
+        # =============================================
+        echo "[+] Updating repo launcher..."
+        curl -sSL https://storage.googleapis.com/git-repo-downloads/repo | sudo tee /usr/bin/repo > /dev/null
+        sudo chmod +x /usr/bin/repo
+        /usr/bin/repo version
+        echo ""
+
         mkdir android-kernel
-        df -h android-kernel
         cd android-kernel
 
         # =============================================
-        # 修复 1: 使用 Google 官方源
-        #   清华镜像缺少 kernel/、kernel/common-modules/
-        #   等子仓库，导致 repo sync 全部 fetch 失败
+        # 修复 2: 使用 Google 官方源
+        #   清华镜像缺少 kernel/ 子仓库
         # =============================================
-        repo init --depth=1 \
+        echo "[+] Initializing repo..."
+        /usr/bin/repo init --depth=1 \
           -u https://android.googlesource.com/kernel/manifest \
           -b common-${{ inputs.simple-tag }} \
           --repo-rev=stable
 
         # =============================================
-        # 修复 2: 只修改 kernel/common 的 revision
-        #   原来的 sed 会把所有仓库的 revision 都替换
-        #   导致非 kernel 仓库找不到 tag 而报错
+        # 修复 3: 只修改 kernel/common 的 revision
+        #   原来 sed 会把所有仓库的 revision 都替换掉
         # =============================================
         if [[ "${{ inputs.tag }}" == *"_r"* ]]; then
-          echo "Detected full tag with _r suffix: ${{ inputs.tag }}"
+          echo "[+] Detected full tag with _r suffix: ${{ inputs.tag }}"
           MANIFEST=".repo/manifests/default.xml"
 
           if [ ! -f "$MANIFEST" ]; then
@@ -100,16 +108,15 @@ runs:
           fi
 
           echo "--- Before sed (kernel/common entry) ---"
-          grep 'name="kernel/common"' "$MANIFEST" || echo "WARNING: kernel/common not found in manifest"
+          grep 'name="kernel/common"' "$MANIFEST"
 
-          # 仅匹配包含 kernel/common 的那一行，替换其 revision
           sed -i '/name="kernel\/common"/s|revision="[^"]*"|revision="${{ inputs.tag }}"|' "$MANIFEST"
 
           echo "--- After sed (kernel/common entry) ---"
-          grep 'name="kernel/common"' "$MANIFEST" || echo "WARNING: kernel/common not found after sed"
+          grep 'name="kernel/common"' "$MANIFEST"
 
           # 验证其他仓库的 revision 没有被修改
-          echo "--- Verification: other repos should NOT contain ${{ inputs.tag }} ---"
+          echo "--- Verification ---"
           if grep -v 'kernel/common' "$MANIFEST" | grep -q '${{ inputs.tag }}'; then
             echo "ERROR: sed modified other repos! Aborting."
             exit 1
@@ -117,7 +124,8 @@ runs:
           echo "Verification passed: only kernel/common was modified."
         fi
 
-        # 检查 remote branch 是否存在
+        # 检查 remote branch
+        echo "[+] Checking remote tag..."
         REMOTE_BRANCH=$(git ls-remote https://android.googlesource.com/kernel/common ${{ inputs.tag }} 2>&1 || true)
         if echo "$REMOTE_BRANCH" | grep -q deprecated; then
           echo "Warning: Found deprecated branch: ${{ inputs.tag }}"
@@ -125,11 +133,45 @@ runs:
           echo "Warning: Tag ${{ inputs.tag }} may not exist on remote"
         fi
 
-        repo --version
+        # =============================================
+        # 修复 4: 启动心跳进程
+        #   repo sync 下载量大（~5-10GB），期间可能长时间
+        #   无输出，心跳每 2 分钟打印一次，便于排查进度
+        # =============================================
+        echo "[+] Starting heartbeat monitor..."
+        (
+          while true; do
+            sleep 120
+            echo "[HEARTBEAT $(date '+%H:%M:%S')] repo sync in progress..."
+            # 打印磁盘使用情况辅助判断
+            du -sh $GITHUB_WORKSPACE/android-kernel 2>/dev/null || true
+          done
+        ) &
+        HEARTBEAT_PID=$!
+        echo "[+] Heartbeat PID: $HEARTBEAT_PID"
 
-        # 同步源码，增加重试次数应对网络不稳定
-        repo sync -c -j$(nproc) --no-tags --retry=10
+        # =============================================
+        # 修复 5: repo sync 参数优化
+        #   -c          : 只同步 manifest 指定的分支
+        #   --no-tags   : 不拉取 tag，减少下载量
+        #   --depth=1   : 浅克隆
+        #   --force-sync: 处理可能的残留状态
+        #   --retry=10  : 网络重试
+        # =============================================
+        echo "[+] Starting repo sync..."
+        /usr/bin/repo sync -c -j$(nproc) --no-tags --depth=1 --force-sync --retry=10
+        SYNC_EXIT=$?
 
+        # 停止心跳
+        kill $HEARTBEAT_PID 2>/dev/null || true
+        wait $HEARTBEAT_PID 2>/dev/null || true
+
+        if [ $SYNC_EXIT -ne 0 ]; then
+          echo "ERROR: repo sync failed with exit code $SYNC_EXIT"
+          exit $SYNC_EXIT
+        fi
+
+        echo "[+] repo sync completed successfully!"
         df -h
 
     - name: Setup CCache
